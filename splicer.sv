@@ -22,8 +22,8 @@
 
 module splicer #(
     parameter DATA_WIDTH = 48,
-    parameter FRAME_WIDTH = 3840,
-    parameter FRAME_HEIGHT = 2160
+    parameter FRAME_WIDTH = 10,
+    parameter FRAME_HEIGHT = 10
 )(
     input  logic                  aclk,
     input  logic                  aresetn,
@@ -86,32 +86,6 @@ module splicer #(
     frame_buffer_tdp fb_ram(.clk(aclk), .we_a(we_a), .addr_a(addr_a), .din_a(din_a), .dout_a(dout_a),
                             .we_b(we_b), .addr_b(addr_b), .din_b(din_b), .dout_b(dout_b));
 
-    // assign R0 = s_axis_tdata[47:40];
-    // assign G0 = s_axis_tdata[39:32];
-    // assign B0 = s_axis_tdata[31:24];
-
-    // assign R1 = s_axis_tdata[23:16];
-    // assign G1 = s_axis_tdata[15:8];
-    // assign B1 = s_axis_tdata[7:0];
-    // Simple passthrough: valid when input is valid, ready when output is ready
-    // always_ff @(posedge aclk) begin
-    //     if (!aresetn) begin
-    //         m_axis_tdata  <= '0;
-    //         m_axis_tvalid <= 1'b0;
-    //         m_axis_tlast  <= 1'b0;
-    //     end else begin
-    //         if (s_axis_tvalid && s_axis_tready) begin
-    //             m_axis_tdata  <= s_axis_tdata;
-    //             m_axis_tvalid <= 1'b1;
-    //             //m_axis_tlast  <= s_axis_tlast;
-    //         end else if (m_axis_tvalid && m_axis_tready) begin
-    //             // transaction accepted by downstream, clear valid
-    //             m_axis_tvalid <= 1'b0;
-    //         end
-    //     end
-    // end
-    
-
     always_ff @(posedge aclk) begin //this takes a stream for a buffer
         if(!aresetn) begin
            count <= 0;
@@ -137,8 +111,8 @@ module splicer #(
                 we_b <= 1;
                 addr_a <= count;
                 addr_b <= count+1;
-                din_a[23:0] <= in_splicer[23:0];
-                din_b[47:24] <= in_splicer[47:24];
+                din_a <= in_splicer[23:0];
+                din_b <= in_splicer[47:24];
                 // frame_buffer[count]   <= in_splicer[23:0];
                 // frame_buffer[count+1] <= in_splicer[47:24];
             end
@@ -147,8 +121,8 @@ module splicer #(
                 we_b <= 0;
                 addr_a <= count;
                 addr_b <= count+1;
-                buffer_out[23:0] <= dout_a[count];
-                buffer_out[47:24] <= dout_b[count + 1];
+                buffer_out[23:0] <= dout_a;
+                buffer_out[47:24] <= dout_b;
                 // buffer_out[23:0] <= frame_buffer[count];
                 // buffer_out[47:24] <= frame_buffer[count + 1];
             end else begin
@@ -157,7 +131,7 @@ module splicer #(
             end
         end
     end
-
+    //FRAME_SIZE*2 goes in DEPTH
     FIFO #(.WIDTH(48), .DEPTH(FRAME_SIZE*2)) input_fifo  (                  .clock(aclk), 
                                                                             .reset_n(aresetn),
                                                                             .data_in(s_axis_tdata), 
@@ -167,7 +141,7 @@ module splicer #(
                                                                             .full(input_fifo_full), 
                                                                             .empty(input_fifo_empty));
 
-    FIFO #(.WIDTH(48), .DEPTH(FRAME_SIZE*2)) output_fifo (                  .clock(aclk), 
+    FIFO #(.WIDTH(48), .DEPTH(FRAME_SIZE*2)) output_fifo (                            .clock(aclk), 
                                                                             .reset_n(aresetn),
                                                                             .data_in(buffer_out), 
                                                                             .data_out(m_axis_tdata), 
@@ -487,8 +461,8 @@ endmodule
 
 
 module frame_buffer_tdp #(
-  parameter WIDTH = 48,
-  parameter DEPTH = 6144
+  parameter WIDTH = 24,
+  parameter DEPTH = 100
 )(
   input  logic                      clk,
   // Port A

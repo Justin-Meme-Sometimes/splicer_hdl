@@ -73,7 +73,7 @@ endmodule : fifo
 module FIFO #(parameter WIDTH=32, DEPTH=4) (
     input logic                  clock, reset_n,
     input logic [WIDTH-1:0]      data_in,
-    input     logic             we, re,
+    input logic                  we, re,
     
     output logic [WIDTH-1:0]     data_out,
     output  logic                full, empty);
@@ -91,10 +91,11 @@ module FIFO #(parameter WIDTH=32, DEPTH=4) (
   
     // implement combinational read 
     always_comb begin
-      if (re && (!empty)) begin
+      if (re && !empty) begin
         data_out = Q[re_ptr];
-      end 
+      end else begin
         data_out  = 0;
+      end
     end 
   
     always_ff @(posedge clock, negedge reset_n) begin

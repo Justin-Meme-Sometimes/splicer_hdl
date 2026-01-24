@@ -31,7 +31,7 @@ module splicer #(
     // AXI4-Stream Slave Interface (input)
     input  logic [DATA_WIDTH-1:0] s_axis_tdata,
     input  logic                  s_axis_tvalid,
-    input  logic                  s_axis_tuser, //represents EOF
+    input  logic                  s_axis_tuser, //represents SOF
     output logic                  s_axis_tready,
     input  logic                  s_axis_tlast, //only represents EOL
 
@@ -46,8 +46,8 @@ module splicer #(
     //(* ram_style = "block" *) logic [FRAME_SIZE-1:0][23:0] frame_buffer;
     logic [47:0] in_splicer, buffer_out;
     logic [FRAME_HEIGHT-1:0] frame_buffer_tlast;
-    logic [15:0] count, col_count;
-    logic done_counting, done_frame, so_done;
+    logic [15:0] count, count_2, col_count;
+    logic done_counting, done_frame, so_done, done_counted, done_counting_full;
     logic output_fifo_empty, out_fifo_full;
     logic in_we, in_re, out_we, out_re;
     logic input_fifo_empty, input_fifo_full;
@@ -89,10 +89,11 @@ module splicer #(
     always_ff @(posedge aclk) begin //this takes a stream for a buffer
         if(!aresetn) begin
            count <= 0;
+           count_2 <= 0;
            col_count <= 0;
         end else begin
             if(count < FRAME_SIZE && started) begin
-                count <= count + 2;
+                count <= count + 1;
                 done_counting <= 0;
             end else begin
                 count <= 0;
@@ -100,6 +101,17 @@ module splicer #(
                     done_counting <= 1;
                 end
             end
+
+            if(count_2 < FRAME_SIZE && done_counted) begin
+                count_2 <= count_2 + 1;
+                done_counting_full <= 0;
+            end else begin
+                count_2 <= 0;
+                if(count == FRAME_SIZE) begin
+                    done_counting_full <= 1;
+                end
+            end
+
             if(col_count < FRAME_SIZE && (started || out_re)) begin
                 col_count <= col_count + 2;
             end else begin
@@ -108,26 +120,17 @@ module splicer #(
             if(s_axis_tvalid && started && !stalled_out_out) begin
                
                 we_a <= 1;
-                we_b <= 1;
                 addr_a <= count;
-                addr_b <= count+1;
-                din_a <= in_splicer[23:0];
-                din_b <= in_splicer[47:24];
+                din_a  <= in_splicer;
                 // frame_buffer[count]   <= in_splicer[23:0];
                 // frame_buffer[count+1] <= in_splicer[47:24];
             end
-            else if(so_done && m_axis_tready && !stalled_out_out) begin //this counts down
+            else if(m_axis_tready && !stalled_out_out) begin //this counts down
                 we_a <= 0;
-                we_b <= 0;
-                addr_a <= count;
-                addr_b <= count+1;
-                buffer_out[23:0] <= dout_a;
-                buffer_out[47:24] <= dout_b;
+                addr_a <= count_2;
+                buffer_out <= dout_a;
                 // buffer_out[23:0] <= frame_buffer[count];
                 // buffer_out[47:24] <= frame_buffer[count + 1];
-            end else begin
-                we_a <= 0;
-                we_b <= 0;
             end
         end
     end
@@ -162,7 +165,7 @@ module splicer #(
                                 .aresetn(aresetn), 
                                 .output_fifo_full(output_fifo_full), 
                                 .done_counting_empty(done_counting_empty), 
-                                .done_counting_full(done_counting),
+                                .done_counting_full(done_counting_full),
                                 .m_axis_tready(m_axis_tready), 
                                 .stalled_out(stalled_out_out), 
                                 .m_axis_tlast(m_axis_tlast),
@@ -177,6 +180,8 @@ module splicer #(
                                 .s_axis_tuser(s_axis_tuser), 
                                 .s_axis_tvalid(s_axis_tvalid), 
                                 .done_frame(done_frame), 
+                                .done_counting(done_counting), 
+                                .done_counted(done_counted),
                                 .in_we(in_we), 
                                 .stalled_in(stalled_in), 
                                 .started(started), 
@@ -185,7 +190,7 @@ module splicer #(
     m_sync_fsm sync_fsm_out (   .aclk(aclk), 
                                 .aresetn(aresetn), 
                                 .output_fifo_empty(output_fifo_empty), 
-                                .done_counting(done_counting), 
+                                .done_counting(done_counting_full), 
                                 .m_axis_tready(m_axis_tready), 
                                 .stalled_out(stalled_out), 
                                 .out_re(out_re), 
@@ -204,13 +209,15 @@ module s_sync_fsm(
     input logic input_fifo_full,
     input logic s_axis_tuser,
     input logic s_axis_tvalid,
-    input logic done_frame,
+    input logic done_counting,
+    output logic done_counted,
+    output logic done_frame,
     output logic in_we,
     output logic stalled_in,
     output logic started,
     output logic s_axis_tready);
 
-    enum {IDLE, RECIEVING} current_state, next_state;
+    enum {IDLE, RECIEVING, BUFFER} current_state, next_state;
 
     always_ff @(posedge aclk) begin
         if(!aresetn) begin
@@ -224,6 +231,8 @@ module s_sync_fsm(
         next_state = current_state;
         unique case (current_state)
             IDLE: begin
+                done_frame = 0;
+                done_counted = 0;
                 if(s_axis_tuser && !input_fifo_full) begin
                     started = 1;
                     stalled_in = 0;
@@ -239,26 +248,46 @@ module s_sync_fsm(
                 end
             end
             RECIEVING: begin
-                if(!input_fifo_full && !done_frame) begin
+                if(done_counting) begin
+                    s_axis_tready = 0;
+                    stalled_in = 0;
+                    started = 0;
+                    done_counted = 1;
+                    in_we = 0;
+                    next_state = BUFFER;
+                end else if(!input_fifo_full) begin
                     s_axis_tready = 1;
                     stalled_in = 0;
                     started = 1;
+                    done_counted = 0;
                     in_we = 1;
                     next_state = RECIEVING;
-                end else if(input_fifo_full && !done_frame) begin
+                end else if(input_fifo_full) begin
                     s_axis_tready = 0;
                     stalled_in = 1;
                     started = 1;
+                    done_counted = 0;
                     in_we = 0;
                     next_state = RECIEVING;
-                end else if(done_frame) begin
-                    s_axis_tready = 0;
+                end
+            end   
+            BUFFER: begin
+                done_frame = 0;
+                done_counted = 1;
+                if(s_axis_tuser && !input_fifo_full) begin
+                    started = 1;
+                    stalled_in = 0;
+                    s_axis_tready = 1;
+                    in_we = 0;
+                    next_state = RECIEVING;
+                end else begin
                     started = 0;
                     stalled_in = 0;
+                    s_axis_tready = 0;
                     in_we = 0;
-                    next_state = IDLE;
+                    next_state =  BUFFER;
                 end
-            end        
+            end  
         endcase
     end
 endmodule
@@ -461,7 +490,7 @@ endmodule
 
 
 module frame_buffer_tdp #(
-  parameter WIDTH = 24,
+  parameter WIDTH = 48,
   parameter DEPTH = 100
 )(
   input  logic                      clk,

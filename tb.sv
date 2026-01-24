@@ -77,10 +77,11 @@ module splicer_tb();
         @(posedge aclk);
         // Send some pixel data
         $display("Sending pixel data...");
-        
+        //
         // Send 10 pixel pairs
         for (i = 0; i < end_of_frame; i++) begin
-            s_axis_tdata <= $urandom() | ($urandom() << 16) | ($urandom() << 32);
+            // s_axis_tdata <= $urandom() | ($urandom() << 16) | ($urandom() << 32);
+            s_axis_tdata <= i;
             s_axis_tvalid  <= 1;
             s_axis_tuser <= (i == 0) ? 1 : 0;  // SOF on first
             s_axis_tlast <=  (i == end_of_frame) ? 1 : 0;  // EOL on last
